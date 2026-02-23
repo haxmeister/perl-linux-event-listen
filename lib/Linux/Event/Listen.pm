@@ -3,7 +3,7 @@ use v5.36;
 use strict;
 use warnings;
 
-our $VERSION = '0.008';
+our $VERSION = '0.010';
 
 use Carp qw(croak);
 use Fcntl qw(F_GETFL F_SETFL O_NONBLOCK F_GETFD F_SETFD FD_CLOEXEC);
@@ -626,7 +626,8 @@ Return the listening socket handle.
   my $host = $listen->sockhost;
   my $port = $listen->sockport;
 
-Convenience accessors that delegate to the underlying socket handle.
+Convenience accessors that delegate to the underlying socket handle. For UNIX
+sockets these may return undef, depending on the underlying implementation.
 
 Return the numeric file descriptor of the listening socket (or undef).
 

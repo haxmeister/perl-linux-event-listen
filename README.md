@@ -1,5 +1,8 @@
 # Linux::Event::Listen
 
+[![CI](https://github.com/haxmeister/perl-linux-event-listen/actions/workflows/ci.yml/badge.svg)](https://github.com/haxmeister/perl-linux-event-listen/actions/workflows/ci.yml)
+
+
 Listening sockets for **Linux::Event**, without injecting any methods into the loop.
 
 ## Install

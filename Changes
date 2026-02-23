@@ -1,5 +1,10 @@
 Revision history for Linux-Event-Listen
 
+0.010  2026-02-22
+  - First CPAN release.
+  - Add GitHub Actions CI workflow and README badge.
+  - Documentation review and minor clarifications (TCP + UNIX).
+
 0.009  2026-02-22
   - Docs: clarify edge-triggered semantics and max_accept_per_tick interaction.
   - Add: family/is_unix/is_tcp convenience methods.
