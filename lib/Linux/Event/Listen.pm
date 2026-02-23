@@ -3,7 +3,7 @@ use v5.36;
 use strict;
 use warnings;
 
-our $VERSION = '0.010';
+our $VERSION = '0.011';
 
 use Carp qw(croak);
 use Fcntl qw(F_GETFL F_SETFL O_NONBLOCK F_GETFD F_SETFD FD_CLOEXEC);
@@ -465,7 +465,6 @@ This distribution is intentionally small and policy-light:
 
 =item *
 
-It does not inject C<< $loop->listen >> or otherwise modify L<Linux::Event::Loop>.
 
 =item *
 

@@ -1,5 +1,8 @@
 Revision history for Linux-Event-Listen
 
+0.011  2026-02-22
+  - Remove references to method injection from POD and README.
+
 0.010  2026-02-22
   - First CPAN release.
   - Add GitHub Actions CI workflow and README badge.

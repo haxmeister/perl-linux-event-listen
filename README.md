@@ -50,7 +50,6 @@ $loop->run;
 - Accept loop drains the accept queue until `EAGAIN` (required for edge-triggered readiness).
 - A fairness cap (`max_accept_per_tick`, default 128) prevents a hot listener from starving other watchers.
 - Accepted client sockets are set non-blocking and handed to user code; the user owns them.
-- This module **does not** inject `$loop->listen()`.
 
 See the POD in `Linux::Event::Listen` for full details.
 
