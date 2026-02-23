@@ -1,5 +1,12 @@
 Revision history for Linux-Event-Listen
 
+0.009  2026-02-22
+  - Docs: clarify edge-triggered semantics and max_accept_per_tick interaction.
+  - Add: family/is_unix/is_tcp convenience methods.
+  - Errors: include host/port or path in setup error hashref.
+  - Tests: add cancel idempotence and UNIX wrap-no-unlink coverage.
+  - Repo hygiene: add .gitignore and a UNIX example.
+
 0.008  2026-02-22
   - Add: UNIX domain socket support via path => ...
   - Add: unlink and unlink_on_cancel options for UNIX sockets.

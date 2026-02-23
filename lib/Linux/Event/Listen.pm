@@ -311,6 +311,10 @@ sub is_paused ($self) { return $self->{paused} ? 1 : 0 }
 
 sub is_running ($self) { return $self->{watcher} ? 1 : 0 }
 
+sub family ($self) { return $self->{_family} // 'unknown' }
+sub is_unix ($self) { return ($self->{_family} // '') eq 'unix' ? 1 : 0 }
+sub is_tcp  ($self) { return ($self->{_family} // '') =~ /\Ainet/ ? 1 : 0 }
+
 sub sockhost ($self) {
   my $fh = $self->{fh} // return undef;
   return eval { $fh->sockhost };

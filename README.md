@@ -67,3 +67,9 @@ my $listen = Linux::Event::Listen->new(
   },
 );
 ```
+
+## UNIX socket lifecycle
+
+When using `path => ...`, `unlink => 1` removes an existing filesystem entry before binding.
+`unlink_on_cancel` defaults true for internally-created UNIX sockets.
+In wrap mode (`fh => ...`), Listen does not know the filesystem path and will not unlink it.
