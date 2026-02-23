@@ -1,5 +1,8 @@
 Revision history for Linux-Event-Listen
 
+0.012  2026-02-22
+  - Remove remaining injection references from README.
+
 0.011  2026-02-22
   - Remove references to method injection from POD and README.
 
