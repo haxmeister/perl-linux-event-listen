@@ -1,5 +1,8 @@
 # Linux::Event::Listen
 
+[![CI](https://github.com/haxmeister/perl-linux-event-listen/actions/workflows/ci.yml/badge.svg)](https://github.com/haxmeister/perl-linux-event-listen/actions/workflows/ci.yml)
+
+
 Listening sockets for **Linux::Event**, supporting both TCP and UNIX domain sockets.
 
 ## Install
@@ -64,4 +67,3 @@ my $listen = Linux::Event::Listen->new(
 - `unlink_on_cancel` defaults true for internally-created UNIX sockets; wrap mode (`fh => ...`) will not unlink paths unless `path` was provided.
 
 See the POD in `Linux::Event::Listen` for full details.
-

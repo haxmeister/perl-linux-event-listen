@@ -1,5 +1,8 @@
 Revision history for Linux-Event-Listen
 
+0.014  2026-02-22
+  - Restore GitHub CI badge in README.
+
 0.013  2026-02-22
   - Documentation: remove all prior references to loop method modification; refresh README and POD for clarity.
 
