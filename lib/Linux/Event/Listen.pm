@@ -3,7 +3,7 @@ use v5.36;
 use strict;
 use warnings;
 
-our $VERSION = '0.012';
+our $VERSION = '0.013';
 
 use Carp qw(croak);
 use Fcntl qw(F_GETFL F_SETFL O_NONBLOCK F_GETFD F_SETFD FD_CLOEXEC);
@@ -277,7 +277,7 @@ sub new ($class, %args) {
   return $self;
 }
 
-# Separate entry-point to keep call sites short without method injection:
+# Separate entry-point to keep call sites short:
 #   my $listen = Linux::Event::Listen->listen($loop, host => ..., port => ..., on_accept => ...);
 sub listen ($class, $loop, %args) {
   return $class->new(loop => $loop, %args);
@@ -414,7 +414,7 @@ __END__
 
 =head1 NAME
 
-Linux::Event::Listen - Listening sockets for Linux::Event (no method injection)
+Linux::Event::Listen - Listening sockets for Linux::Event
 
 =head1 SYNOPSIS
 
@@ -656,6 +656,21 @@ Disable/enable read interest on the listening socket.
 Cancel the underlying watcher and, if C<owns_socket> is true, close the listening
 socket.
 
+=head1 ERROR HASH
+
+When C<on_error> or C<on_emfile> is invoked, the second argument is a hashref
+describing the condition.
+
+Common keys:
+
+  op     - one of: setup, accept, watch, on_accept
+  error  - string form of the error
+  errno  - numeric errno (only when the error came from C<$!>)
+  fatal  - boolean (true for setup failures)
+
+Depending on how the listener was created, C<host>/C<port> or C<path> may be
+present for C<op = setup> errors.
+
 =head1 ACCEPT LOOP SEMANTICS
 
 When the listening socket is readable, this module attempts to accept connections
@@ -674,10 +689,6 @@ in a loop until one of these conditions is met:
 The following errors are retried: C<EINTR>, C<ECONNABORTED>.
 
 =head1 NOTES
-
-This distribution intentionally does B<not> inject a method into
-L<Linux::Event::Loop>. Use C<< Linux::Event::Listen->new(loop => $loop, ...) >>
-or C<< Linux::Event::Listen->listen($loop, ...) >>.
 
 =head1 SEE ALSO
 

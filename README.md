@@ -1,6 +1,6 @@
 # Linux::Event::Listen
 
-[![CI](https://github.com/haxmeister/perl-linux-event-listen/actions/workflows/ci.yml/badge.svg)](https://github.com/haxmeister/perl-linux-event-listen/actions/workflows/ci.yml)
+Listening sockets for **Linux::Event**, supporting both TCP and UNIX domain sockets.
 
 ## Install
 
@@ -8,7 +8,7 @@
 cpanm Linux::Event::Listen
 ```
 
-## Usage
+## Usage (TCP)
 
 ```perl
 use v5.36;
@@ -24,51 +24,44 @@ my $listen = Linux::Event::Listen->new(
 
   on_accept => sub ($loop, $client_fh, $peer, $listen) {
     # You own $client_fh (already non-blocking).
-    $loop->watch($client_fh,
-      read => sub ($loop, $fh, $w) {
-        my $buf;
-        my $n = sysread($fh, $buf, 8192);
-        if (!defined $n || $n == 0) {
-          $w->cancel;
-          close $fh;
-          return;
-        }
-        # ... handle $buf ...
-      },
-    );
+    ...
   },
 );
 
 $loop->run;
 ```
 
-## Semantics
-
-- Accept loop drains the accept queue until `EAGAIN` (required for edge-triggered readiness).
-- A fairness cap (`max_accept_per_tick`, default 128) prevents a hot listener from starving other watchers.
-- Accepted client sockets are set non-blocking and handed to user code; the user owns them.
-
-See the POD in `Linux::Event::Listen` for full details.
-
-### Optional: EMFILE/ENFILE handling
-
-You can provide `on_emfile` to implement a reserve-FD mitigation strategy when the process runs out of file descriptors.
-
-## UNIX domain sockets
+## Usage (UNIX)
 
 ```perl
 my $listen = Linux::Event::Listen->new(
-  loop => $loop,
-  path => '/tmp/app.sock',
+  loop   => $loop,
+  path   => '/tmp/app.sock',
   unlink => 1,
+
   on_accept => sub ($loop, $client_fh, $peer, $listen) {
     ...
   },
 );
 ```
 
+## Guarantees and semantics
+
+- Drains `accept()` until `EAGAIN` when edge-triggered readiness is used.
+- `max_accept_per_tick` limits work per callback to avoid starving other watchers.
+- If `max_accept_per_tick` is explicitly set and `edge_triggered` is not, the listener defaults to level-triggered readiness to avoid edge-trigger stalls.
+- Accepted sockets are set non-blocking and handed to user code; you own them.
+- `cancel()` is safe to call from inside `on_accept` (listener close may be deferred until the callback returns).
+
+## Error handling
+
+- `on_error` receives a hashref describing the condition (`op`, `error`, optional `errno`).
+- `on_emfile` is invoked for `EMFILE`/`ENFILE` accept failures (useful for reserve-FD mitigation).
+
 ## UNIX socket lifecycle
 
-When using `path => ...`, `unlink => 1` removes an existing filesystem entry before binding.
-`unlink_on_cancel` defaults true for internally-created UNIX sockets.
-In wrap mode (`fh => ...`), Listen does not know the filesystem path and will not unlink it.
+- `unlink => 1` removes an existing path before binding.
+- `unlink_on_cancel` defaults true for internally-created UNIX sockets; wrap mode (`fh => ...`) will not unlink paths unless `path` was provided.
+
+See the POD in `Linux::Event::Listen` for full details.
+
