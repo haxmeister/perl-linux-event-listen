@@ -1,0 +1,19 @@
+Revision history for Linux-Event-Listen
+
+0.005  2026-02-22
+  - Semantics: if max_accept_per_tick is explicitly set and edge_triggered is not,
+    default to level-triggered readiness to prevent EPOLLET stalls.
+
+0.004  2026-02-22
+  - Tests: stop the loop explicitly and add alarms to prevent hangs.
+
+0.003  2026-02-22
+  - Fix: correct syntax regression in 0.002 (extra brace in watcher callback).
+
+0.002  2026-02-22
+  - Fix: cancel() is now safe when called inside on_accept.
+    Prevents accept() on closed socket (EBADF) during read callback.
+    Listener close is deferred until after read callback returns.
+
+0.001  2026-02-22
+  - Initial release.
