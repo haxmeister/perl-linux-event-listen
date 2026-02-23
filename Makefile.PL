@@ -15,7 +15,8 @@ WriteMakefile(
 
   PREREQ_PM => {
     'Linux::Event'    => 0,
-    'IO::Socket::IP'  => 0, # core
+    'IO::Socket::IP'   => 0, # core
+    'IO::Socket::UNIX' => 0, # core
   },
 
   META_MERGE => {

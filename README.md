@@ -50,3 +50,20 @@ $loop->run;
 - This module **does not** inject `$loop->listen()`.
 
 See the POD in `Linux::Event::Listen` for full details.
+
+### Optional: EMFILE/ENFILE handling
+
+You can provide `on_emfile` to implement a reserve-FD mitigation strategy when the process runs out of file descriptors.
+
+## UNIX domain sockets
+
+```perl
+my $listen = Linux::Event::Listen->new(
+  loop => $loop,
+  path => '/tmp/app.sock',
+  unlink => 1,
+  on_accept => sub ($loop, $client_fh, $peer, $listen) {
+    ...
+  },
+);
+```

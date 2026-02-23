@@ -1,5 +1,21 @@
 Revision history for Linux-Event-Listen
 
+0.008  2026-02-22
+  - Add: UNIX domain socket support via path => ...
+  - Add: unlink and unlink_on_cancel options for UNIX sockets.
+  - Peer: report { family => 'unix', path => ... } for UNIX clients.
+  - Tests: add UNIX socket coverage.
+
+0.007  2026-02-22
+  - Fix: repair is_paused() declaration (was corrupted in generated tar).
+  - Packaging: source-only tarballs (no blib/MANIFEST/MYMETA/Makefile).
+
+0.006  2026-02-22
+  - Setup: validate provided fh is a listening socket (SO_ACCEPTCONN).
+  - Add: on_emfile callback for EMFILE/ENFILE accept failures.
+  - Add: is_running, sockhost, sockport convenience methods.
+  - Tests: add wrap-existing-fh and on_accept die coverage.
+
 0.005  2026-02-22
   - Semantics: if max_accept_per_tick is explicitly set and edge_triggered is not,
     default to level-triggered readiness to prevent EPOLLET stalls.

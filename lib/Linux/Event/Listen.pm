@@ -3,17 +3,19 @@ use v5.36;
 use strict;
 use warnings;
 
-our $VERSION = '0.005';
+our $VERSION = '0.008';
 
 use Carp qw(croak);
 use Fcntl qw(F_GETFL F_SETFL O_NONBLOCK F_GETFD F_SETFD FD_CLOEXEC);
 use Socket qw(
+  SOL_SOCKET SO_ACCEPTCONN
   AF_INET6
   IPPROTO_IPV6 IPV6_V6ONLY
-  unpack_sockaddr_in unpack_sockaddr_in6
+  unpack_sockaddr_in unpack_sockaddr_in6 unpack_sockaddr_un
   inet_ntoa inet_ntop
 );
-use IO::Socket::IP (); # core
+use IO::Socket::IP ();   # core
+use IO::Socket::UNIX (); # core
 
 # new(%args)
 #
@@ -48,6 +50,9 @@ sub new ($class, %args) {
   my $on_error = delete $args{on_error};
   croak 'on_error must be a code reference' if defined($on_error) && ref($on_error) ne 'CODE';
 
+  my $on_emfile = delete $args{on_emfile};
+  croak 'on_emfile must be a code reference' if defined($on_emfile) && ref($on_emfile) ne 'CODE';
+
   my $warn_on_unhandled_error = delete($args{warn_on_unhandled_error}) // 0;
 
   my $user_edge = exists $args{edge_triggered} ? 1 : 0;
@@ -77,26 +82,42 @@ sub new ($class, %args) {
   my $fh   = delete $args{fh};
   my $host = delete $args{host};
   my $port = delete $args{port};
+  my $path = delete $args{path};
+  my $unlink = delete($args{unlink}) // 0;
+  my $unlink_on_cancel = exists $args{unlink_on_cancel} ? delete($args{unlink_on_cancel}) : undef;
 
   my $owns_socket = delete($args{owns_socket});
 
   croak "unknown option(s): @{[ sort keys %args ]}" if %args;
 
-  croak 'provide either fh => $server_fh OR host/port' if defined($fh) && (defined($host) || defined($port));
+  croak 'provide either fh => $server_fh OR host/port OR path' if defined($fh) && (defined($host) || defined($port) || defined($path));
   croak 'host and port must be provided together' if (defined($host) xor defined($port));
+  croak 'path cannot be combined with host/port' if defined($path) && defined($host);
 
 
   if (!defined $fh) {
-    croak 'either fh or host/port is required' if !defined($host);
+    croak 'either fh, host/port, or path is required' if !defined($host) && !defined($path);
 
-    $fh = IO::Socket::IP->new(
-      LocalHost => $host,
-      LocalPort => $port,
-      Listen    => $backlog,
-      Proto     => 'tcp',
-      ReuseAddr => $reuseaddr ? 1 : 0,
-      ($reuseport ? (ReusePort => 1) : ()),
-    );
+    if (defined $path) {
+      if ($unlink) {
+        unlink($path);
+      }
+
+      $fh = IO::Socket::UNIX->new(
+        Type  => Socket::SOCK_STREAM(),
+        Local => $path,
+        Listen => $backlog,
+      );
+    } else {
+      $fh = IO::Socket::IP->new(
+        LocalHost => $host,
+        LocalPort => $port,
+        Listen    => $backlog,
+        Proto     => 'tcp',
+        ReuseAddr => $reuseaddr ? 1 : 0,
+        ($reuseport ? (ReusePort => 1) : ()),
+      );
+    }
 
     if (!$fh) {
       my $err = {
@@ -122,8 +143,17 @@ sub new ($class, %args) {
     }
 
     $owns_socket = 1 if !defined $owns_socket;
+    $unlink_on_cancel = 1 if defined($path) && !defined($unlink_on_cancel);
   } else {
     $owns_socket = 0 if !defined $owns_socket;
+  }
+
+  # If caller provided fh, validate it is in listening state.
+  if (defined $fh && !defined $host) {
+    my $acceptconn = getsockopt($fh, SOL_SOCKET, SO_ACCEPTCONN);
+    if (!defined $acceptconn || !unpack('i', $acceptconn)) {
+      croak 'fh is not a listening socket (SO_ACCEPTCONN is false)';
+    }
   }
 
   # Force nonblocking + cloexec on the listening fh
@@ -136,12 +166,15 @@ sub new ($class, %args) {
     owns_socket => $owns_socket ? 1 : 0,
     on_accept   => $on_accept,
     on_error    => $on_error,
+    on_emfile => $on_emfile,
     warn_on_unhandled_error => $warn_on_unhandled_error ? 1 : 0,
     edge_triggered => $edge_triggered ? 1 : 0,
     oneshot        => $oneshot ? 1 : 0,
     max_accept_per_tick => $max_accept_per_tick,
     paused => 0,
     watcher => undef,
+    _unix_path => (defined $path ? $path : undef),
+    _unlink_on_cancel => ($unlink_on_cancel ? 1 : 0),
     _in_read_cb   => 0,
     _defer_close  => 0,
     _cancelled    => 0,
@@ -177,7 +210,10 @@ sub new ($class, %args) {
             fatal => 0,
           };
 
-          if ($self->{on_error}) {
+          if (($errno == _EMFILE() || $errno == _ENFILE()) && $self->{on_emfile}) {
+            eval { $self->{on_emfile}->($loop, $err, $self) };
+          } elsif ($self->{on_error}) {
+
             eval { $self->{on_error}->($loop, $err, $self) };
           } elsif ($self->{warn_on_unhandled_error}) {
             warn "Linux::Event::Listen accept error: $err->{error}\n";
@@ -213,6 +249,9 @@ sub new ($class, %args) {
       if ($self->{_defer_close} && $self->{fh}) {
         close($self->{fh});
         delete $self->{fh};
+        if ($self->{_unix_path} && $self->{_unlink_on_cancel}) {
+          unlink($self->{_unix_path});
+        }
         $self->{_defer_close} = 0;
       }
     },
@@ -270,6 +309,19 @@ sub resume ($self) {
 
 sub is_paused ($self) { return $self->{paused} ? 1 : 0 }
 
+sub is_running ($self) { return $self->{watcher} ? 1 : 0 }
+
+sub sockhost ($self) {
+  my $fh = $self->{fh} // return undef;
+  return eval { $fh->sockhost };
+}
+
+sub sockport ($self) {
+  my $fh = $self->{fh} // return undef;
+  return eval { $fh->sockport };
+}
+
+
 sub cancel ($self) {
   $self->{_cancelled} = 1;
 
@@ -282,6 +334,9 @@ sub cancel ($self) {
     } else {
       close($self->{fh});
       delete $self->{fh};
+      if ($self->{_unix_path} && $self->{_unlink_on_cancel}) {
+        unlink($self->{_unix_path});
+      }
     }
   }
 
@@ -333,6 +388,11 @@ sub _peer_from_sockaddr ($packed) {
     };
   }
 
+  my $upath = eval { unpack_sockaddr_un($packed) };
+  if (defined $upath) {
+    return { family => 'unix', path => $upath };
+  }
+
   return { family => 'unknown' };
 }
 
@@ -341,6 +401,8 @@ sub _EINTR        () { 4 }
 sub _EAGAIN       () { 11 }
 sub _EWOULDBLOCK  () { 11 }   # Linux: same as EAGAIN
 sub _ECONNABORTED () { 103 }
+sub _EMFILE       () { 24 }
+sub _ENFILE       () { 23 }
 
 1;
 
@@ -444,7 +506,11 @@ A listening socket handle (already bound and in listen state), or
 
 =item * C<host> and C<port>
 
-Address to bind and listen on.
+TCP address to bind and listen on, or
+
+=item * C<path>
+
+UNIX domain socket path to bind and listen on.
 
 =back
 
@@ -461,6 +527,13 @@ Ownership: you own C<$client_fh>. This module never closes it.
 =head2 on_error
 
   on_error => sub ($loop, $err, $listen) { ... }
+
+=head2 on_emfile
+
+  on_emfile => sub ($loop, $err, $listen) { ... }
+
+Optional callback invoked when accept() fails with C<EMFILE> or C<ENFILE>.
+This is where production servers often implement "reserve FD" mitigation.
 
 Optional callback invoked for accept-time errors and watcher error/hup events.
 
@@ -508,6 +581,25 @@ Sets C<FD_CLOEXEC> on the listening socket and accepted sockets (best-effort).
 Accepted sockets are set non-blocking (best-effort). The listening socket is also
 set non-blocking.
 
+=head2 path
+
+  path => '/tmp/app.sock'
+
+Bind and listen on a UNIX domain socket path.
+
+=head2 unlink
+
+  unlink => 1
+
+If true and C<path> is used, unlink the path before binding (useful for restarts).
+
+=head2 unlink_on_cancel
+
+  unlink_on_cancel => 1
+
+If true and C<path> is used, unlink the socket file when the listener is
+cancelled (or destroyed). Defaults to true for internally-created UNIX sockets.
+
 =head2 owns_socket
 
 If true, C<< $listen->cancel >> will close the listening socket. Defaults to
@@ -525,11 +617,24 @@ Return the listening socket handle.
 
   my $fd = $listen->fd;
 
+=head2 sockhost / sockport
+
+  my $host = $listen->sockhost;
+  my $port = $listen->sockport;
+
+Convenience accessors that delegate to the underlying socket handle.
+
 Return the numeric file descriptor of the listening socket (or undef).
 
 =head2 watcher
 
   my $w = $listen->watcher;
+
+=head2 is_running
+
+  if ($listen->is_running) { ... }
+
+True if the underlying watcher is installed.
 
 Return the underlying L<Linux::Event::Watcher>.
 
