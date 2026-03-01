@@ -1,0 +1,14 @@
+blib/
+Makefile
+Makefile.old
+MYMETA.json
+MYMETA.yml
+pm_to_blib
+MANIFEST
+_build/
+Build
+Build.bat
+*.tar.gz
+*.tar
+*.zip
+.DS_Store
