@@ -3,7 +3,7 @@ use v5.36;
 use strict;
 use warnings;
 
-our $VERSION = '0.014';
+our $VERSION = '0.015';
 
 use Carp qw(croak);
 use Fcntl qw(F_GETFL F_SETFL O_NONBLOCK F_GETFD F_SETFD FD_CLOEXEC);
@@ -446,7 +446,23 @@ Linux::Event::Listen - Listening sockets for Linux::Event
       );
     },
 
-    on_error => sub ($loop, $err, $listen) {
+    
+# Canonical server pattern (Listen + Stream + line codec):
+#   use Linux::Event::Stream;
+#
+#   on_accept => sub ($loop, $client_fh, $peer, $listen) {
+#     my $stream = Linux::Event::Stream->new(
+#       loop       => $loop,
+#       fh         => $client_fh,
+#       codec      => 'line',   # built-in codec alias in Linux::Event::Stream 0.002+
+#       on_message => sub ($stream, $line, $data) {
+#         # $line is a complete line (without trailing "\n").
+#         $stream->write_message("echo: $line");
+#         $stream->close_after_drain if $line eq 'quit';
+#       },
+#     );
+#   },
+on_error => sub ($loop, $err, $listen) {
       warn "listener error ($err->{op}): $err->{error}\n";
     },
   );
@@ -703,3 +719,33 @@ Joshua S. Day
 Same terms as Perl itself.
 
 =cut
+=head1 STREAM INTEGRATION
+
+L<Linux::Event::Listen> is intentionally policy-light: it accepts connections and
+hands you a non-blocking client filehandle. A common pattern is to immediately
+wrap the client socket in L<Linux::Event::Stream> and use a codec to define
+message boundaries. For example, line-delimited protocols:
+
+  use Linux::Event::Stream;
+
+  my $listen = Linux::Event::Listen->new(
+    loop => $loop,
+    host => '127.0.0.1',
+    port => 3000,
+
+    on_accept => sub ($loop, $client_fh, $peer, $listen) {
+      Linux::Event::Stream->new(
+        loop       => $loop,
+        fh         => $client_fh,
+        codec      => 'line',
+        on_message => sub ($stream, $line, $data) {
+          $stream->write_message($line);  # echo
+        },
+      );
+    },
+  );
+
+This keeps C<Listen> focused on accepting sockets while C<Stream> handles buffered
+I/O and framing.
+
+
