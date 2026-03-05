@@ -431,7 +431,7 @@ Linux::Event::Listen - Listening sockets for Linux::Event
     port => 3000,
 
     on_accept => sub ($loop, $client_fh, $peer, $listen) {
-      # You own $client_fh. It is already non-blocking.
+      # You own $client_fh. It is already non-blocking (best-effort enforced).
       $loop->watch($client_fh,
         read => sub ($loop, $fh, $w) {
           my $buf;
@@ -453,63 +453,108 @@ Linux::Event::Listen - Listening sockets for Linux::Event
     },
   );
 
-  # Canonical server pattern: Listen + Stream + line codec.
-  # This keeps Listen focused on accepting sockets while Stream handles buffered
-  # I/O and framing.
-  #
-  #   use Linux::Event::Stream;
-  #
-  #   Linux::Event::Listen->new(
-  #     loop => $loop,
-  #     host => '127.0.0.1',
-  #     port => 3000,
-  #
-  #     on_accept => sub ($loop, $client_fh, $peer, $listen) {
-  #       Linux::Event::Stream->new(
-  #         loop       => $loop,
-  #         fh         => $client_fh,
-  #         codec      => 'line',
-  #         on_message => sub ($stream, $line, $data) {
-  #           $stream->write_message("echo: $line");
-  #           $stream->close_after_drain if $line eq 'quit';
-  #         },
-  #       );
-  #     },
-  #   );
-
   $loop->run;
+
+=head2 Canonical server pattern: Listen + Stream + line codec
+
+This keeps Listen focused on accepting sockets while Stream handles buffered I/O,
+backpressure, and framing.
+
+  use Linux::Event::Stream;
+
+  Linux::Event::Listen->new(
+    loop => $loop,
+    host => '127.0.0.1',
+    port => 3000,
+
+    on_accept => sub ($loop, $client_fh, $peer, $listen) {
+
+      Linux::Event::Stream->new(
+        loop => $loop,
+        fh   => $client_fh,
+
+        codec      => 'line',
+        on_message => sub ($stream, $line, $data) {
+          $stream->write_message("echo: $line");
+          $stream->close_after_drain if $line eq 'quit';
+        },
+
+        on_error => sub ($stream, $errno, $data) {
+          # fatal I/O error; stream will close
+        },
+
+        on_close => sub ($stream, $data) {
+          # closed
+        },
+      );
+    },
+  );
 
 =head1 DESCRIPTION
 
-B<Linux::Event::Listen> creates or wraps a listening socket and attaches it to a
-L<Linux::Event> loop. When the socket becomes readable, it accepts connections
-and invokes your C<on_accept> callback once per accepted client.
+B<Linux::Event::Listen> creates (or wraps) a listening socket and integrates it
+with a L<Linux::Event> loop. When the socket becomes readable, it accepts as many
+connections as possible (subject to a fairness cap) and invokes your C<on_accept>
+callback once per accepted client.
 
-This distribution is intentionally small and policy-light:
+This module is intentionally small and policy-light:
 
 =over 4
 
 =item *
 
-It accepts connections and invokes your callback; it does not implement any
-application protocol.
+It binds/listens (or wraps an existing listening socket) and accepts connections.
 
 =item *
 
-It does not create per-connection watchers for you.
+It does not implement any application protocol.
 
 =item *
 
-It guarantees the correct accept-drain behavior required for edge-triggered
-notification (accept until C<EAGAIN>), with a fairness cap.
+It does not provide buffered I/O or framing. For that, compose with
+L<Linux::Event::Stream>.
+
+=item *
+
+It correctly drains accept readiness (accept until C<EAGAIN>/C<EWOULDBLOCK>),
+which is required for edge-triggered readiness.
 
 =back
+
+=head1 LAYERING
+
+This distribution is part of a composable socket stack:
+
+=over 4
+
+=item * B<Linux::Event::Listen>
+
+Server-side socket acquisition: bind + listen + accept. Produces accepted
+nonblocking filehandles.
+
+=item * B<Linux::Event::Connect>
+
+Client-side socket acquisition: nonblocking outbound connect. Produces connected
+nonblocking filehandles.
+
+=item * B<Linux::Event::Stream>
+
+Buffered I/O + backpressure for an established filehandle (accepted or
+connected). Stream owns the filehandle and handles read/write buffering.
+
+=back
+
+Canonical composition:
+
+  Listen/Connect -> Stream -> (your protocol/codec/state)
 
 =head1 CONSTRUCTOR
 
 =head2 new
 
   my $listen = Linux::Event::Listen->new(%args);
+
+Creates and starts a listener immediately. Unknown keys are fatal.
 
 Required:
 
@@ -527,140 +572,217 @@ Called once per accepted connection.
 
 =back
 
-You must also provide either:
+You must provide exactly one socket source:
 
 =over 4
 
 =item * C<fh>
 
-A listening socket handle (already bound and in listen state), or
+Wrap an existing listening socket handle, or
 
 =item * C<host> and C<port>
 
-TCP address to bind and listen on, or
+Bind and listen on a TCP address, or
 
 =item * C<path>
 
-UNIX domain socket path to bind and listen on.
+Bind and listen on a UNIX domain socket path.
 
 =back
 
-=head1 OPTIONS
+=head2 listen
+
+  my $listen = Linux::Event::Listen->listen(%args);
+
+Convenience alias for C<new>.
+
+=head1 CALLBACK CONTRACT
 
 =head2 on_accept
 
   on_accept => sub ($loop, $client_fh, $peer, $listen) { ... }
 
-Your callback is invoked once per accepted connection.
+Called once per accepted client.
 
 Ownership: you own C<$client_fh>. This module never closes it.
+
+Nonblocking: accepted sockets are set nonblocking (best-effort). The listening
+socket is also set nonblocking (best-effort). In practice, this module enforces
+nonblocking-only semantics.
+
+C<$peer> is a peer address string suitable for logging. For UNIX sockets it may
+be empty/undef depending on platform behavior.
+
+If your callback throws/dies, it is treated as an error with C<< op => 'on_accept' >>.
 
 =head2 on_error
 
   on_error => sub ($loop, $err, $listen) { ... }
 
+Fatal listener error. C<$err> is a hashref; see L</ERROR HASH>.
+
 =head2 on_emfile
 
   on_emfile => sub ($loop, $err, $listen) { ... }
 
-Optional callback invoked when accept() fails with C<EMFILE> or C<ENFILE>.
+Optional callback invoked when C<accept(2)> fails with C<EMFILE> or C<ENFILE>.
 This is where production servers often implement "reserve FD" mitigation.
 
-Optional callback invoked for accept-time errors and watcher error/hup events.
+=head1 OPTIONS
 
-C<$err> is a hashref with keys like:
+=head2 Socket source
 
-  { op => 'accept', errno => ..., error => "...", fatal => 0 }
+=head3 fh
 
-=head2 edge_triggered
+  fh => $server_fh
 
-  edge_triggered => 1  # default
+Wrap an existing listening socket.
 
-Sets the underlying watcher to edge-triggered mode. The accept loop always drains
-the accept queue until C<EAGAIN>, which is required for correctness when edge
-triggered.
+=head3 host / port
 
-=head2 oneshot
+  host => '127.0.0.1',
+  port => 3000,
 
-  oneshot => 0  # default
+Bind and listen on a TCP address.
 
-Passed through to the underlying watcher.
-
-=head2 max_accept_per_tick
-
-  max_accept_per_tick => 128  # default
-
-Upper bound on accepted connections per readable event callback.
-
-If you set this option without explicitly setting C<edge_triggered>, this module
-will default to level-triggered readiness so the cap cannot stall the listener.
-
-If you explicitly enable C<edge_triggered> and also cap accepts-per-tick, you
-must ensure you still eventually drain accept() until C<EAGAIN> (for example by
-using a level-triggered listener, or designing your own re-arm strategy).
-
-=head2 cloexec
-
-  cloexec => 1  # default
-
-Sets C<FD_CLOEXEC> on the listening socket and accepted sockets (best-effort).
-
-=head2 nonblocking
-
-  nonblocking => 1  # default
-
-Accepted sockets are set non-blocking (best-effort). The listening socket is also
-set non-blocking.
-
-=head2 path
+=head3 path
 
   path => '/tmp/app.sock'
 
 Bind and listen on a UNIX domain socket path.
 
-=head2 unlink
+=head2 Socket setup
 
-  unlink => 1
+=head3 backlog
+
+  backlog => 4096  # default
+
+Listen backlog passed to C<listen(2)> when creating a socket internally.
+
+=head3 reuseaddr
+
+  reuseaddr => 1  # default
+
+Enable C<SO_REUSEADDR> for internally-created INET sockets.
+
+=head3 reuseport
+
+  reuseport => 0  # default
+
+Enable C<SO_REUSEPORT> for internally-created INET sockets.
+
+=head3 v6only
+
+  v6only => undef  # default (OS default)
+
+If set (0 or 1), applies C<IPV6_V6ONLY> for internally-created IPv6 sockets.
+
+=head3 cloexec
+
+  cloexec => 1  # default
+
+Sets C<FD_CLOEXEC> on the listening socket and accepted sockets (best-effort).
+
+=head3 nonblocking
+
+  nonblocking => 1  # default
+
+Sets C<O_NONBLOCK> on the listening socket and accepted sockets (best-effort).
+
+=head2 UNIX path management
+
+=head3 unlink
+
+  unlink => 0  # default
 
 If true and C<path> is used, unlink the path before binding (useful for restarts).
 
-=head2 unlink_on_cancel
+=head3 unlink_on_cancel
 
   unlink_on_cancel => 1
 
 If true and C<path> is used, unlink the socket file when the listener is
 cancelled (or destroyed). Defaults to true for internally-created UNIX sockets.
 
-=head2 owns_socket
+=head2 Watcher behavior
 
-If true, C<< $listen->cancel >> will close the listening socket. Defaults to
-false when C<fh> is provided, and true when the socket is created internally.
+=head3 edge_triggered
+
+  edge_triggered => 1  # default
+
+Sets the underlying watcher to edge-triggered mode.
+
+Edge-triggered readiness requires draining accept until C<EAGAIN>, which this
+module performs.
+
+=head3 oneshot
+
+  oneshot => 0  # default
+
+Passed through to the underlying watcher.
+
+=head3 max_accept_per_tick
+
+  max_accept_per_tick => 128  # default
+
+Upper bound on accepted connections per readable event callback (fairness cap).
+
+If you set this option without explicitly setting C<edge_triggered>, this module
+defaults to level-triggered readiness so the cap cannot stall the listener.
+
+If you explicitly enable C<edge_triggered> and also cap accepts-per-tick, you
+must ensure you still eventually drain accept() until C<EAGAIN> (for example by
+designing your own re-arm strategy).
+
+=head2 Error policy
+
+=head3 warn_on_unhandled_error
+
+  warn_on_unhandled_error => 0  # default
+
+If true and no C<on_error> callback is provided, warn on fatal/unhandled errors.
+
+=head2 Listener ownership
+
+=head3 owns_socket
+
+  owns_socket => 1|0
+
+If true, C<< $listen->cancel >> will close the listening socket.
+
+Defaults:
+
+=over 4
+
+=item * false when C<fh> is provided
+
+=item * true when the socket is created internally (host/port/path)
+
+=back
 
 =head1 METHODS
-
-=head2 fh
-
-  my $fh = $listen->fh;
-
-Return the listening socket handle.
-
-=head2 fd
-
-  my $fd = $listen->fd;
-
-=head2 sockhost / sockport
-
-  my $host = $listen->sockhost;
-  my $port = $listen->sockport;
-
-Convenience accessors that delegate to the underlying socket handle. For UNIX
-sockets these may return undef, depending on the underlying implementation.
-
-Return the numeric file descriptor of the listening socket (or undef).
 
 =head2 watcher
 
   my $w = $listen->watcher;
+
+Return the underlying L<Linux::Event::Watcher>.
+
+=head2 fh / fd
+
+  my $fh = $listen->fh;
+  my $fd = $listen->fd;
+
+Return the listening socket handle or numeric fd (or undef).
+
+=head2 pause / resume / is_paused
+
+  $listen->pause;
+  $listen->resume;
+
+  if ($listen->is_paused) { ... }
+
+Disable/enable read interest on the listening socket.
 
 =head2 is_running
 
@@ -668,32 +790,40 @@ Return the numeric file descriptor of the listening socket (or undef).
 
 True if the underlying watcher is installed.
 
-Return the underlying L<Linux::Event::Watcher>.
+=head2 family / is_unix / is_tcp
 
-=head2 pause / resume
+  my $af = $listen->family;
 
-  $listen->pause;
-  $listen->resume;
+  $listen->is_unix;
+  $listen->is_tcp;
 
-Disable/enable read interest on the listening socket.
+Introspection for the listener address family.
+
+=head2 sockhost / sockport
+
+  my $host = $listen->sockhost;
+  my $port = $listen->sockport;
+
+Convenience accessors that delegate to the underlying socket handle. For UNIX
+sockets these may return undef.
 
 =head2 cancel
 
   $listen->cancel;
 
-Cancel the underlying watcher and, if C<owns_socket> is true, close the listening
-socket.
+Cancel the underlying watcher. If C<owns_socket> is true, close the listening
+socket. For UNIX sockets, C<unlink_on_cancel> may also unlink the path.
 
 =head1 ERROR HASH
 
-When C<on_error> or C<on_emfile> is invoked, the second argument is a hashref
+When C<on_error> or C<on_emfile> is invoked, the C<$err> argument is a hashref
 describing the condition.
 
 Common keys:
 
   op     - one of: setup, accept, watch, on_accept
   error  - string form of the error
-  errno  - numeric errno (only when the error came from C<$!>)
+  errno  - numeric errno (only when the error came from $!)
   fatal  - boolean (true for setup failures)
 
 Depending on how the listener was created, C<host>/C<port> or C<path> may be
@@ -708,7 +838,7 @@ in a loop until one of these conditions is met:
 
 =item * accept returns C<EAGAIN> / C<EWOULDBLOCK> (normal)
 
-=item * C<max_accept_per_tick> is reached (fairness)
+=item * C<max_accept_per_tick> is reached (fairness cap)
 
 =item * a non-retryable accept error occurs
 
@@ -716,41 +846,10 @@ in a loop until one of these conditions is met:
 
 The following errors are retried: C<EINTR>, C<ECONNABORTED>.
 
-=head1 NOTES
-
-=head1 STREAM INTEGRATION
-
-Linux::Event::Listen is intentionally policy-light: it accepts connections and
-hands you a non-blocking client filehandle. A common pattern is to immediately
-wrap the client socket in L<Linux::Event::Stream> and use a codec to define
-message boundaries. For example, line-delimited protocols:
-
-  use Linux::Event::Stream;
-
-  my $listen = Linux::Event::Listen->new(
-    loop => $loop,
-    host => '127.0.0.1',
-    port => 3000,
-
-    on_accept => sub ($loop, $client_fh, $peer, $listen) {
-      Linux::Event::Stream->new(
-        loop       => $loop,
-        fh         => $client_fh,
-        codec      => 'line',
-        on_message => sub ($stream, $line, $data) {
-          $stream->write_message("echo: $line");
-          $stream->close_after_drain if $line eq 'quit';
-        },
-      );
-    },
-  );
-
-This keeps Listen focused on accepting sockets while Stream handles buffered I/O
-and framing.
-
 =head1 SEE ALSO
 
-L<Linux::Event>, L<Linux::Event::Loop>, L<Linux::Event::Watcher>, L<IO::Socket::IP>
+L<Linux::Event>, L<Linux::Event::Loop>, L<Linux::Event::Watcher>,
+L<Linux::Event::Stream>, L<Linux::Event::Connect>, L<IO::Socket::IP>
 
 =head1 AUTHOR
 
@@ -759,3 +858,5 @@ Joshua S. Day
 =head1 LICENSE
 
 Same terms as Perl itself.
+
+=cut

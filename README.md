@@ -2,52 +2,63 @@
 
 [![CI](https://github.com/haxmeister/perl-linux-event-listen/actions/workflows/ci.yml/badge.svg)](https://github.com/haxmeister/perl-linux-event-listen/actions/workflows/ci.yml)
 
+Nonblocking bind + accept for the Linux::Event ecosystem.
 
-Listening sockets for **Linux::Event**, supporting both TCP and UNIX domain sockets.
+## Linux::Event Ecosystem
 
-## Install
+The Linux::Event modules are designed as a composable stack of small,
+explicit components rather than a framework.
 
-```bash
-cpanm Linux::Event::Listen
-```
+Each module has a narrow responsibility and can be combined with the others
+to build event-driven applications.
 
-## Usage (TCP)
+Core layers:
 
-```perl
+Linux::Event
+    The event loop. Linux-native readiness engine using epoll and related
+    kernel facilities. Provides watchers and the dispatch loop.
+
+Linux::Event::Listen
+    Server-side socket acquisition (bind + listen + accept). Produces accepted
+    nonblocking filehandles.
+
+Linux::Event::Connect
+    Client-side socket acquisition (nonblocking connect). Produces connected
+    nonblocking filehandles.
+
+Linux::Event::Stream
+    Buffered I/O and backpressure management for an established filehandle.
+
+Linux::Event::Fork
+    Asynchronous child process management integrated with the event loop.
+
+Linux::Event::Clock
+    High resolution monotonic time utilities used for scheduling and deadlines.
+
+Canonical network composition:
+
+Listen / Connect
+        ↓
+      Stream
+        ↓
+  Application protocol
+
+Example stack:
+
+Linux::Event::Listen → Linux::Event::Stream → your protocol
+
+or
+
+Linux::Event::Connect → Linux::Event::Stream → your protocol
+
+The core loop intentionally remains a primitive layer and does not grow
+into a framework. Higher-level behavior is composed from small modules.
+
+## Synopsis
+
 use v5.36;
 use Linux::Event;
 use Linux::Event::Listen;
-
-my $loop = Linux::Event->new;
-
-my $listen = Linux::Event::Listen->new(
-  loop => $loop,
-  host => '127.0.0.1',
-  port => 3000,
-
-  on_accept => sub ($loop, $client_fh, $peer, $listen) {
-    # You own $client_fh (already non-blocking).
-    ...
-  },
-);
-
-$loop->run;
-```
-
-
-### Canonical server pattern: Listen + Stream + line codec
-
-If you are building a message-oriented protocol over TCP (for example, one JSON
-value per line), a common pattern is to wrap each accepted client socket in
-L<Linux::Event::Stream> and let Stream handle buffering and framing.
-
-This example uses Stream's built-in C<line> codec (Linux::Event::Stream 0.002+):
-
-```perl
-use v5.36;
-use Linux::Event;
-use Linux::Event::Listen;
-use Linux::Event::Stream;
 
 my $loop = Linux::Event->new;
 
@@ -56,11 +67,46 @@ Linux::Event::Listen->new(
   host => '127.0.0.1',
   port => 3000,
 
-  on_accept => sub ($loop, $client_fh, $peer, $listen) {
+  on_accept => sub ($loop, $fh, $peer, $listen) {
+
+    # You own $fh
+    $loop->watch($fh,
+      read => sub ($loop, $fh, $w) {
+
+        my $buf;
+        my $n = sysread($fh, $buf, 8192);
+
+        if (!defined $n || $n == 0) {
+          $w->cancel;
+          close $fh;
+          return;
+        }
+
+        # handle $buf
+      },
+    );
+  },
+);
+
+$loop->run;
+
+## Canonical integration with Stream
+
+use Linux::Event::Stream;
+
+Linux::Event::Listen->new(
+  loop => $loop,
+  host => '127.0.0.1',
+  port => 3000,
+
+  on_accept => sub ($loop, $fh, $peer, $listen) {
+
     Linux::Event::Stream->new(
-      loop       => $loop,
-      fh         => $client_fh,
+      loop => $loop,
+      fh   => $fh,
+
       codec      => 'line',
+
       on_message => sub ($stream, $line, $data) {
         $stream->write_message("echo: $line");
         $stream->close_after_drain if $line eq 'quit';
@@ -70,38 +116,15 @@ Linux::Event::Listen->new(
 );
 
 $loop->run;
-```
 
-## Usage (UNIX)
+## Notes
 
-```perl
-my $listen = Linux::Event::Listen->new(
-  loop   => $loop,
-  path   => '/tmp/app.sock',
-  unlink => 1,
+Accepted sockets are nonblocking (best-effort enforced).
 
-  on_accept => sub ($loop, $client_fh, $peer, $listen) {
-    ...
-  },
-);
-```
+You own accepted filehandles.
 
-## Guarantees and semantics
+Listener teardown is explicit via $listen->cancel.
 
-- Drains `accept()` until `EAGAIN` when edge-triggered readiness is used.
-- `max_accept_per_tick` limits work per callback to avoid starving other watchers.
-- If `max_accept_per_tick` is explicitly set and `edge_triggered` is not, the listener defaults to level-triggered readiness to avoid edge-trigger stalls.
-- Accepted sockets are set non-blocking and handed to user code; you own them.
-- `cancel()` is safe to call from inside `on_accept` (listener close may be deferred until the callback returns).
+## License
 
-## Error handling
-
-- `on_error` receives a hashref describing the condition (`op`, `error`, optional `errno`).
-- `on_emfile` is invoked for `EMFILE`/`ENFILE` accept failures (useful for reserve-FD mitigation).
-
-## UNIX socket lifecycle
-
-- `unlink => 1` removes an existing path before binding.
-- `unlink_on_cancel` defaults true for internally-created UNIX sockets; wrap mode (`fh => ...`) will not unlink paths unless `path` was provided.
-
-See the POD in `Linux::Event::Listen` for full details.
+Same terms as Perl itself.
